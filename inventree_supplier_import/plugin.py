@@ -37,7 +37,7 @@ logger = logging.getLogger('inventree')
 PLUGIN_VERSION = '2.0.0'
 
 
-class SupplierImportPlugin(UserInterfaceMixin, SettingsMixin, UrlsMixin, InvenTreePlugin):
+class SupplierImportPlugin(InvenTreePlugin, UserInterfaceMixin, SettingsMixin, UrlsMixin):
 
     NAME = 'SupplierImport'
     SLUG = 'supplier-import'
