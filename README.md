@@ -1,6 +1,6 @@
 # inventree-supplier-import
 
-Plugin InvenTree pour importer des composants directement depuis un SKU fournisseur.
+Plugin InvenTree **(>= 1.0)** pour importer des composants depuis un SKU fournisseur.
 
 **Fournisseurs supportés** : Mouser, DigiKey, Farnell / Element14, RS Components
 
@@ -8,83 +8,62 @@ Plugin InvenTree pour importer des composants directement depuis un SKU fourniss
 
 ## Fonctionnalités
 
-- **Import unitaire** : panel sur chaque page Part pour créer un composant depuis un SKU
-- **Import CSV en masse** : page dédiée pour uploader un fichier CSV avec plusieurs SKU
-- Génération automatique d'IPN (ex. `LAB-0042`)
-- Création de la Part InvenTree + SupplierPart + price breaks
-- Catégorie **"À classer"** créée automatiquement si inexistante
+- **Panel unitaire** sur chaque page Part — saisie SKU + bouton Import
+- **Page CSV** dédiée (`/plugin/supplier-import/csv-page/`) — import en masse
+- Génération automatique d'IPN (`LAB-0001`, `LAB-0002`…)
+- Création automatique : Part + SupplierPart + Price Breaks
+- Catégorie **"À classer"** créée si elle n'existe pas
 
 ---
 
-## Installation
+## Installation depuis GitHub
 
-```bash
-pip install git+https://github.com/your-lab/inventree-supplier-import.git
-```
+Dans InvenTree : **Admin → Plugins → Install plugin**
 
-Ou depuis le répertoire local :
-
-```bash
-cd inventree-supplier-import
-pip install -e .
-```
-
-Puis dans InvenTree :  
-**Admin → Plugins → Activer `SupplierImportPlugin`**
+| Champ | Valeur |
+|---|---|
+| Package Name | `inventree-supplier-import` |
+| Source URL | `git+https://github.com/Tomaaso/inventree-supplier-import.git` |
+| Version | *(laisser vide)* |
 
 ---
 
-## Configuration des clés API
+## Configuration
 
 Dans **Admin → Plugins → SupplierImport → Settings** :
 
 | Paramètre | Description |
 |---|---|
-| `IPN_PREFIX` | Préfixe IPN, ex. `LAB` → génère `LAB-0001` |
-| `MOUSER_API_KEY` | Clé API Mouser (obtenir sur [mouser.fr/api-search](https://www.mouser.fr/api-hub/)) |
-| `DIGIKEY_CLIENT_ID` | Client ID DigiKey (portail API DigiKey) |
+| `IPN_PREFIX` | Préfixe IPN, ex. `LAB` → `LAB-0001` |
+| `MOUSER_API_KEY` | Clé API Mouser |
+| `DIGIKEY_CLIENT_ID` | Client ID DigiKey (OAuth2) |
 | `DIGIKEY_CLIENT_SECRET` | Client Secret DigiKey |
 | `FARNELL_API_KEY` | Clé API Farnell / Element14 |
 | `RS_API_KEY` | Clé API RS Components |
 
-### Obtenir les clés API
+### ⚠️ Activer l'interface plugin
 
-**Mouser**  
-→ [https://www.mouser.fr/api-hub/](https://www.mouser.fr/api-hub/)  
-S'enregistrer, créer une application, récupérer la clé "Part Search API".
+Dans **Admin → Settings → Plugin Settings** :
+- ✅ **Enable interface integration** (`ENABLE_PLUGINS_INTERFACE`)
 
-**DigiKey**  
-→ [https://developer.digikey.com/](https://developer.digikey.com/)  
-Créer une organisation, puis une "Production App". Récupérer `Client ID` et `Client Secret`.  
-⚠️ L'auth est OAuth2 client credentials (pas d'OAuth interactif nécessaire pour la recherche).
+Sans ce flag, le panel n'apparaîtra pas sur les pages Part.
 
-**Farnell / Element14**  
-→ [https://partner.element14.com/](https://partner.element14.com/)  
-S'inscrire comme partenaire, récupérer la clé API "Product Search".
+### Fournisseurs InvenTree requis
 
-**RS Components**  
-→ [https://fr.rs-online.com/web/generalDisplay.html?id=footer/api-terms](https://fr.rs-online.com/web/generalDisplay.html?id=footer/api-terms)  
-Contacter RS pour l'accès API (moins automatisé que les autres).
+Les fournisseurs doivent exister dans InvenTree (Admin → Companies) avec exactement ces noms :
+`Mouser`, `DigiKey`, `Farnell`, `RS Components`
 
 ---
 
 ## Utilisation
 
 ### Import unitaire
-
-Ouvrir n'importe quelle page **Parts** dans InvenTree.  
-Le panel **"Import from Supplier SKU"** apparaît dans le bas de la page.
-
-1. Sélectionner le fournisseur
-2. Saisir le SKU
-3. Cliquer sur **Import**
+Ouvrir une page **Part** → panel **"Import Fournisseur"** dans la sidebar.
 
 ### Import CSV
+Naviguer vers `/plugin/supplier-import/csv-page/`
 
-Naviguer vers `/plugin/supplier-import/import-page/`
-
-Format CSV attendu :
-
+Format CSV :
 ```csv
 supplier,sku
 mouser,667-ERJ-3EKF1001V
@@ -93,32 +72,30 @@ farnell,1469817
 rs,123-4567
 ```
 
-Un bouton **"Download template"** est disponible sur la page d'import.
-
 ---
 
-## Prérequis
-
-- InvenTree >= 0.13
-- Python >= 3.10
-- Les fournisseurs doivent être créés dans InvenTree (Admin → Companies) avec exactement les noms : `Mouser`, `DigiKey`, `Farnell`, `RS Components`
-
----
-
-## Structure du projet
+## Structure
 
 ```
 inventree-supplier-import/
+├── setup.py
 ├── setup.cfg
-├── README.md
+├── MANIFEST.in
+├── static/
+│   └── SupplierImportPanel.js   ← UI panel (vanilla JS, pas de build requis)
 └── inventree_supplier_import/
-    ├── __init__.py
-    ├── plugin.py          # Plugin principal, panels, URLs, vues
-    ├── importer.py        # Logique de création Part/SupplierPart/PriceBreaks
+    ├── plugin.py       ← UserInterfaceMixin + URLs + vues
+    ├── importer.py     ← Logique IPN / Part / SupplierPart / PriceBreaks
     └── suppliers/
-        ├── __init__.py
         ├── mouser.py
         ├── digikey.py
         ├── farnell.py
         └── rs.py
 ```
+
+---
+
+## Prérequis
+
+- InvenTree **>= 1.0.0**
+- Python >= 3.10

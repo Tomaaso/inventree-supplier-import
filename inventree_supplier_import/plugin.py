@@ -1,16 +1,15 @@
 """
-InvenTree Supplier Import Plugin
----------------------------------
-Adds two panels to InvenTree:
-  - Single SKU import (any supplier page)
-  - Bulk CSV import (dedicated plugin page)
+InvenTree Supplier Import Plugin — compatible InvenTree >= 1.0
+--------------------------------------------------------------
+Utilise UserInterfaceMixin (remplace PanelMixin supprimé en 1.0).
 
-Settings (configured in InvenTree plugin admin):
-  IPN_PREFIX       : e.g. "LAB"
-  MOUSER_API_KEY   : Mouser search API key
-  DIGIKEY_CLIENT_ID / DIGIKEY_CLIENT_SECRET
-  FARNELL_API_KEY
-  RS_API_KEY
+Deux points d'entrée :
+  - Panel sur la page Part : import unitaire par SKU
+  - Page dédiée CSV      : /plugin/supplier-import/csv-page/
+
+Settings (Admin → Plugins → SupplierImport → Settings) :
+  IPN_PREFIX, MOUSER_API_KEY, DIGIKEY_CLIENT_ID,
+  DIGIKEY_CLIENT_SECRET, FARNELL_API_KEY, RS_API_KEY
 """
 
 import csv
@@ -18,13 +17,14 @@ import io
 import json
 import logging
 
-from django.http import JsonResponse
+from django.http import HttpResponse, JsonResponse
 from django.views import View
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
+from django.urls import path
 
 from plugin import InvenTreePlugin
-from plugin.mixins import PanelMixin, SettingsMixin, UrlsMixin
+from plugin.mixins import SettingsMixin, UrlsMixin, UserInterfaceMixin
 
 from .importer import create_part_from_supplier_data
 from .suppliers.mouser import MouserSupplier
@@ -32,415 +32,314 @@ from .suppliers.digikey import DigiKeySupplier
 from .suppliers.farnell import FarnellSupplier
 from .suppliers.rs import RSSupplier
 
-logger = logging.getLogger("inventree")
+logger = logging.getLogger('inventree')
 
-PLUGIN_VERSION = "1.0.0"
+PLUGIN_VERSION = '2.0.0'
 
 
-class SupplierImportPlugin(PanelMixin, SettingsMixin, UrlsMixin, InvenTreePlugin):
+class SupplierImportPlugin(UserInterfaceMixin, SettingsMixin, UrlsMixin, InvenTreePlugin):
 
-    NAME = "SupplierImport"
-    SLUG = "supplier-import"
-    TITLE = "Supplier Part Importer"
-    DESCRIPTION = "Import parts from Mouser, DigiKey, Farnell and RS Components via SKU"
+    NAME = 'SupplierImport'
+    SLUG = 'supplier-import'
+    TITLE = 'Supplier Part Importer'
+    DESCRIPTION = 'Import parts from Mouser, DigiKey, Farnell and RS Components via SKU'
     VERSION = PLUGIN_VERSION
-    AUTHOR = "Your Lab"
+    AUTHOR = 'Your Lab'
+    MIN_VERSION = '1.0.0'
 
     # ------------------------------------------------------------------ #
-    #  Plugin settings (visible in InvenTree > Admin > Plugins)           #
+    #  Settings                                                            #
     # ------------------------------------------------------------------ #
     SETTINGS = {
-        "IPN_PREFIX": {
-            "name": "IPN Prefix",
-            "description": "Prefix used for auto-generated IPN (e.g. LAB → LAB-0001)",
-            "default": "LAB",
+        'IPN_PREFIX': {
+            'name': 'IPN Prefix',
+            'description': 'Prefix used for auto-generated IPN (e.g. LAB → LAB-0001)',
+            'default': 'LAB',
         },
-        "MOUSER_API_KEY": {
-            "name": "Mouser API Key",
-            "description": "Mouser part search API key",
-            "default": "",
-            "protected": True,
+        'MOUSER_API_KEY': {
+            'name': 'Mouser API Key',
+            'description': 'Mouser part search API key',
+            'default': '',
+            'protected': True,
         },
-        "DIGIKEY_CLIENT_ID": {
-            "name": "DigiKey Client ID",
-            "description": "DigiKey OAuth2 client ID",
-            "default": "",
-            "protected": True,
+        'DIGIKEY_CLIENT_ID': {
+            'name': 'DigiKey Client ID',
+            'description': 'DigiKey OAuth2 client ID',
+            'default': '',
+            'protected': True,
         },
-        "DIGIKEY_CLIENT_SECRET": {
-            "name": "DigiKey Client Secret",
-            "description": "DigiKey OAuth2 client secret",
-            "default": "",
-            "protected": True,
+        'DIGIKEY_CLIENT_SECRET': {
+            'name': 'DigiKey Client Secret',
+            'description': 'DigiKey OAuth2 client secret',
+            'default': '',
+            'protected': True,
         },
-        "FARNELL_API_KEY": {
-            "name": "Farnell API Key",
-            "description": "Farnell / Element14 API key",
-            "default": "",
-            "protected": True,
+        'FARNELL_API_KEY': {
+            'name': 'Farnell API Key',
+            'description': 'Farnell / Element14 API key',
+            'default': '',
+            'protected': True,
         },
-        "RS_API_KEY": {
-            "name": "RS Components API Key",
-            "description": "RS Components API key",
-            "default": "",
-            "protected": True,
+        'RS_API_KEY': {
+            'name': 'RS Components API Key',
+            'description': 'RS Components API key',
+            'default': '',
+            'protected': True,
         },
     }
 
     # ------------------------------------------------------------------ #
-    #  Helper: build the right supplier adapter from a name string        #
+    #  UserInterfaceMixin — panel sur la page Part                        #
     # ------------------------------------------------------------------ #
-    def _get_supplier(self, supplier_name: str):
-        name = supplier_name.lower().strip()
-        if name == "mouser":
-            key = self.get_setting("MOUSER_API_KEY")
-            return MouserSupplier(api_key=key)
-        elif name == "digikey":
-            return DigiKeySupplier(
-                client_id=self.get_setting("DIGIKEY_CLIENT_ID"),
-                client_secret=self.get_setting("DIGIKEY_CLIENT_SECRET"),
-            )
-        elif name in ("farnell", "element14"):
-            return FarnellSupplier(api_key=self.get_setting("FARNELL_API_KEY"))
-        elif name in ("rs", "rs components", "radiospares", "rs_components"):
-            return RSSupplier(api_key=self.get_setting("RS_API_KEY"))
-        return None
+    def get_ui_panels(self, request, context: dict, **kwargs):
+        """Injecte le panel d'import SKU sur la page détail d'une Part."""
+        panels = []
+        if context.get('target_model') == 'part':
+            panels.append({
+                'key': 'supplier-import-panel',
+                'title': 'Import Fournisseur',
+                'description': 'Importer depuis un SKU fournisseur',
+                'icon': 'ti:download:outline',
+                # Fichier JS compilé dans static/
+                'source': self.plugin_static_file('SupplierImportPanel.js:renderSupplierImportPanel'),
+                # Données passées au JS via context.context
+                'context': {
+                    'slug': self.SLUG,
+                    'api_url': f'/plugin/{self.SLUG}/import-sku/',
+                    'csv_page_url': f'/plugin/{self.SLUG}/csv-page/',
+                },
+            })
+        return panels
 
     # ------------------------------------------------------------------ #
-    #  Custom URLs                                                         #
+    #  URLs                                                                #
     # ------------------------------------------------------------------ #
+    URLS = [
+        path('import-sku/', csrf_exempt(lambda request, plugin=None: _import_sku_view(request, plugin)), name='import-sku'),
+        path('import-csv/', csrf_exempt(lambda request, plugin=None: _import_csv_view(request, plugin)), name='import-csv'),
+        path('csv-page/', lambda request, plugin=None: _csv_page_view(request, plugin), name='csv-page'),
+    ]
+
     def setup_urls(self):
-        from django.urls import path
+        """Bind URL handlers with plugin instance."""
+        plugin = self
         return [
-            path("import-sku/", self.ImportSkuView.as_view(plugin=self), name="import-sku"),
-            path("import-csv/", self.ImportCsvView.as_view(plugin=self), name="import-csv"),
-            path("import-page/", self.ImportPageView.as_view(plugin=self), name="import-page"),
+            path('import-sku/', csrf_exempt(lambda request: _import_sku_view(request, plugin)), name='import-sku'),
+            path('import-csv/', csrf_exempt(lambda request: _import_csv_view(request, plugin)), name='import-csv'),
+            path('csv-page/', lambda request: _csv_page_view(request, plugin), name='csv-page'),
         ]
 
     # ------------------------------------------------------------------ #
-    #  Panel injection                                                     #
+    #  Helper: instancier le bon adapter fournisseur                      #
     # ------------------------------------------------------------------ #
-    def get_custom_panels(self, view, request):
-        """Inject the single-SKU panel on every Part detail page."""
-        panels = []
+    def get_supplier(self, name: str):
+        n = name.lower().strip()
+        if n == 'mouser':
+            return MouserSupplier(api_key=self.get_setting('MOUSER_API_KEY'))
+        if n == 'digikey':
+            return DigiKeySupplier(
+                client_id=self.get_setting('DIGIKEY_CLIENT_ID'),
+                client_secret=self.get_setting('DIGIKEY_CLIENT_SECRET'),
+            )
+        if n in ('farnell', 'element14'):
+            return FarnellSupplier(api_key=self.get_setting('FARNELL_API_KEY'))
+        if n in ('rs', 'rs components', 'radiospares', 'rs_components'):
+            return RSSupplier(api_key=self.get_setting('RS_API_KEY'))
+        return None
 
-        if view.__class__.__name__ == "PartDetail":
-            panels.append({
-                "title": "Import from Supplier SKU",
-                "icon": "fa-download",
-                "content": self._render_single_panel(),
-            })
 
-        return panels
+# ------------------------------------------------------------------ #
+#  Vues standalone (fonctions pour éviter les problèmes de binding)   #
+# ------------------------------------------------------------------ #
 
-    def _render_single_panel(self) -> str:
-        """HTML + JS for the single-SKU import panel."""
-        return """
-<div id="supplier-import-panel" style="padding: 16px; max-width: 560px;">
-  <h5 style="margin-bottom: 12px;">Import a part from a supplier SKU</h5>
+def _import_sku_view(request, plugin: SupplierImportPlugin):
+    """POST {supplier, sku} → crée Part + SupplierPart + PriceBreaks."""
+    if request.method != 'POST':
+        return JsonResponse({'error': 'POST required'}, status=405)
+    try:
+        body = json.loads(request.body)
+        supplier_name = body.get('supplier', '').strip()
+        sku = body.get('sku', '').strip()
+    except Exception:
+        return JsonResponse({'success': False, 'error': 'Invalid JSON'}, status=400)
 
-  <div style="margin-bottom: 10px;">
-    <label for="si-supplier" style="font-weight:600">Supplier</label>
-    <select id="si-supplier" class="form-control" style="margin-top:4px">
-      <option value="mouser">Mouser</option>
-      <option value="digikey">DigiKey</option>
-      <option value="farnell">Farnell</option>
-      <option value="rs">RS Components</option>
-    </select>
-  </div>
+    if not supplier_name or not sku:
+        return JsonResponse({'success': False, 'error': 'supplier and sku are required'}, status=400)
 
-  <div style="margin-bottom: 10px;">
-    <label for="si-sku" style="font-weight:600">SKU / Part Number</label>
-    <input id="si-sku" class="form-control" type="text" placeholder="e.g. 667-ERJ-3EKF1001V"
-           style="margin-top:4px"/>
-  </div>
+    supplier = plugin.get_supplier(supplier_name)
+    if supplier is None:
+        return JsonResponse({'success': False, 'error': f'Unknown supplier: {supplier_name}'}, status=400)
 
-  <button id="si-submit" class="btn btn-primary" onclick="siImportSku()">
-    <i class="fas fa-download"></i> Import
-  </button>
+    part_data = supplier.fetch_part(sku)
+    if part_data is None:
+        return JsonResponse({'success': False, 'error': f"SKU '{sku}' not found at {supplier_name}"})
 
-  <div id="si-result" style="margin-top: 14px; display:none;"></div>
-</div>
+    prefix = plugin.get_setting('IPN_PREFIX') or 'LAB'
+    result = create_part_from_supplier_data(request, part_data, prefix)
+    return JsonResponse(result)
 
-<script>
-function siImportSku() {
-  const supplier = document.getElementById('si-supplier').value;
-  const sku = document.getElementById('si-sku').value.trim();
-  const resultDiv = document.getElementById('si-result');
 
-  if (!sku) {
-    resultDiv.innerHTML = '<div class="alert alert-warning">Please enter a SKU.</div>';
-    resultDiv.style.display = 'block';
-    return;
-  }
+def _import_csv_view(request, plugin: SupplierImportPlugin):
+    """POST multipart/form-data avec csv_file → import en masse."""
+    if request.method != 'POST':
+        return JsonResponse({'error': 'POST required'}, status=405)
 
-  document.getElementById('si-submit').disabled = true;
-  resultDiv.innerHTML = '<div class="alert alert-info"><i class="fas fa-spinner fa-spin"></i> Importing...</div>';
-  resultDiv.style.display = 'block';
+    csv_file = request.FILES.get('csv_file')
+    if not csv_file:
+        return JsonResponse({'success': False, 'error': 'No file uploaded'}, status=400)
 
-  fetch('/plugin/supplier-import/import-sku/', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrftoken')},
-    body: JSON.stringify({supplier, sku}),
-  })
-  .then(r => r.json())
-  .then(data => {
-    document.getElementById('si-submit').disabled = false;
-    if (data.success) {
-      resultDiv.innerHTML = `
-        <div class="alert alert-success">
-          <strong>✓ Part created!</strong><br>
-          IPN: <code>${data.ipn}</code> &nbsp;
-          <a href="/part/${data.part_pk}/" target="_blank">Open part →</a>
-        </div>`;
-    } else {
-      resultDiv.innerHTML = `<div class="alert alert-danger"><strong>Error:</strong> ${data.error}</div>`;
-    }
-  })
-  .catch(err => {
-    document.getElementById('si-submit').disabled = false;
-    resultDiv.innerHTML = `<div class="alert alert-danger">Request failed: ${err}</div>`;
-  });
-}
+    text = csv_file.read().decode('utf-8-sig')
+    reader = csv.DictReader(io.StringIO(text))
+    results = []
+    prefix = plugin.get_setting('IPN_PREFIX') or 'LAB'
 
-function getCookie(name) {
-  const v = document.cookie.match('(^|;) ?' + name + '=([^;]*)(;|$)');
-  return v ? v[2] : null;
-}
-</script>
-"""
+    for row in reader:
+        row = {k.lower().strip(): v.strip() for k, v in row.items()}
+        supplier_name = row.get('supplier', '')
+        sku = row.get('sku', '')
 
-    # ------------------------------------------------------------------ #
-    #  Views                                                               #
-    # ------------------------------------------------------------------ #
-    @method_decorator(csrf_exempt, name="dispatch")
-    class ImportSkuView(View):
-        plugin = None
+        if not supplier_name or not sku:
+            results.append({'sku': sku or '?', 'supplier': supplier_name or '?',
+                            'success': False, 'error': 'Missing supplier or sku'})
+            continue
 
-        def post(self, request, *args, **kwargs):
-            try:
-                body = json.loads(request.body)
-                supplier_name = body.get("supplier", "").strip()
-                sku = body.get("sku", "").strip()
-            except Exception:
-                return JsonResponse({"success": False, "error": "Invalid JSON body"}, status=400)
+        supplier = plugin.get_supplier(supplier_name)
+        if supplier is None:
+            results.append({'sku': sku, 'supplier': supplier_name,
+                            'success': False, 'error': f'Unknown supplier: {supplier_name}'})
+            continue
 
-            if not supplier_name or not sku:
-                return JsonResponse({"success": False, "error": "supplier and sku are required"}, status=400)
-
-            supplier = self.plugin._get_supplier(supplier_name)
-            if supplier is None:
-                return JsonResponse({"success": False, "error": f"Unknown supplier: {supplier_name}"}, status=400)
-
+        try:
             part_data = supplier.fetch_part(sku)
             if part_data is None:
-                return JsonResponse({"success": False, "error": f"SKU '{sku}' not found at {supplier_name}"})
+                results.append({'sku': sku, 'supplier': supplier_name,
+                                'success': False, 'error': 'SKU not found'})
+                continue
+            result = create_part_from_supplier_data(request, part_data, prefix)
+            results.append({'sku': sku, 'supplier': supplier_name, **result})
+        except Exception as e:
+            results.append({'sku': sku, 'supplier': supplier_name,
+                            'success': False, 'error': str(e)})
 
-            prefix = self.plugin.get_setting("IPN_PREFIX") or "LAB"
-            result = create_part_from_supplier_data(request.plugin_api, part_data, prefix)
-            return JsonResponse(result)
+    total = len(results)
+    ok = sum(1 for r in results if r.get('success'))
+    return JsonResponse({'total': total, 'imported': ok, 'failed': total - ok, 'results': results})
 
-    @method_decorator(csrf_exempt, name="dispatch")
-    class ImportCsvView(View):
-        plugin = None
 
-        def post(self, request, *args, **kwargs):
-            csv_file = request.FILES.get("csv_file")
-            if not csv_file:
-                return JsonResponse({"success": False, "error": "No file uploaded"}, status=400)
-
-            text = csv_file.read().decode("utf-8-sig")
-            reader = csv.DictReader(io.StringIO(text))
-
-            # Accept headers: supplier, sku  (case-insensitive)
-            results = []
-            prefix = self.plugin.get_setting("IPN_PREFIX") or "LAB"
-
-            for row in reader:
-                # Normalise header names
-                row = {k.lower().strip(): v.strip() for k, v in row.items()}
-                supplier_name = row.get("supplier", "")
-                sku = row.get("sku", "")
-
-                if not supplier_name or not sku:
-                    results.append({
-                        "sku": sku or "?",
-                        "supplier": supplier_name or "?",
-                        "success": False,
-                        "error": "Missing supplier or sku column",
-                    })
-                    continue
-
-                supplier = self.plugin._get_supplier(supplier_name)
-                if supplier is None:
-                    results.append({
-                        "sku": sku,
-                        "supplier": supplier_name,
-                        "success": False,
-                        "error": f"Unknown supplier: {supplier_name}",
-                    })
-                    continue
-
-                try:
-                    part_data = supplier.fetch_part(sku)
-                    if part_data is None:
-                        results.append({
-                            "sku": sku,
-                            "supplier": supplier_name,
-                            "success": False,
-                            "error": "SKU not found",
-                        })
-                        continue
-
-                    result = create_part_from_supplier_data(request.plugin_api, part_data, prefix)
-                    results.append({
-                        "sku": sku,
-                        "supplier": supplier_name,
-                        **result,
-                    })
-                except Exception as e:
-                    results.append({
-                        "sku": sku,
-                        "supplier": supplier_name,
-                        "success": False,
-                        "error": str(e),
-                    })
-
-            total = len(results)
-            ok = sum(1 for r in results if r.get("success"))
-            return JsonResponse({"total": total, "imported": ok, "failed": total - ok, "results": results})
-
-    class ImportPageView(View):
-        plugin = None
-
-        def get(self, request, *args, **kwargs):
-            from django.http import HttpResponse
-            html = """
-<!doctype html>
-<html>
+def _csv_page_view(request, plugin: SupplierImportPlugin):
+    """Page HTML autonome pour l'import CSV en masse."""
+    slug = plugin.SLUG
+    html = f"""<!doctype html>
+<html lang="fr">
 <head>
-  <title>Supplier CSV Import</title>
-  <link rel="stylesheet"
-        href="https://cdn.jsdelivr.net/npm/bootstrap@4.6.2/dist/css/bootstrap.min.css">
-  <link rel="stylesheet"
-        href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
+  <meta charset="utf-8">
+  <title>Import CSV Fournisseurs — InvenTree</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css">
   <style>
-    body { padding: 32px; background: #f8f9fa; }
-    .card { max-width: 700px; }
-    .result-row-ok  { background: #d4edda; }
-    .result-row-err { background: #f8d7da; }
-    pre { font-size: 0.82em; }
+    body {{ padding: 2rem; background: #f8f9fa; }}
+    .card {{ max-width: 760px; margin: auto; }}
+    .result-ok  {{ background: #d1e7dd; }}
+    .result-err {{ background: #f8d7da; }}
+    code {{ font-size: 0.85em; }}
   </style>
 </head>
 <body>
 <div class="card shadow-sm">
-  <div class="card-header bg-primary text-white">
-    <i class="fas fa-file-csv"></i> Bulk CSV Import — Supplier Parts
+  <div class="card-header bg-primary text-white fw-bold">
+    📦 Import CSV — Composants fournisseurs
   </div>
   <div class="card-body">
-
-    <p class="text-muted">
-      Upload a CSV file with two columns: <code>supplier</code> and <code>sku</code>.<br>
-      Accepted supplier values: <strong>mouser, digikey, farnell, rs</strong>
+    <p class="text-muted mb-3">
+      Fichier CSV avec les colonnes <code>supplier</code> et <code>sku</code>.<br>
+      Valeurs acceptées pour supplier : <strong>mouser, digikey, farnell, rs</strong>
     </p>
 
     <div class="mb-3">
-      <label class="font-weight-bold">CSV file</label>
-      <input type="file" id="csv-file" accept=".csv" class="form-control-file mt-1"/>
+      <label class="form-label fw-semibold">Fichier CSV</label>
+      <input type="file" id="csv-file" accept=".csv" class="form-control">
     </div>
 
-    <button class="btn btn-primary" onclick="uploadCsv()">
-      <i class="fas fa-upload"></i> Import CSV
-    </button>
-    <button class="btn btn-outline-secondary ml-2" onclick="downloadTemplate()">
-      <i class="fas fa-download"></i> Download template
-    </button>
-
-    <div id="progress" style="display:none; margin-top:16px">
-      <div class="alert alert-info">
-        <i class="fas fa-spinner fa-spin"></i> Importing, please wait…
-      </div>
+    <div class="d-flex gap-2 mb-3">
+      <button class="btn btn-primary" onclick="uploadCsv()">⬆ Importer</button>
+      <button class="btn btn-outline-secondary" onclick="downloadTemplate()">⬇ Template CSV</button>
     </div>
 
-    <div id="summary" style="display:none; margin-top:16px"></div>
-    <div id="results-table" style="margin-top:12px"></div>
+    <div id="progress" class="d-none">
+      <div class="alert alert-info">⏳ Import en cours…</div>
+    </div>
+    <div id="summary"></div>
+    <div id="results-table" class="mt-3"></div>
   </div>
 </div>
 
 <script>
-function getCookie(name) {
+const SLUG = '{slug}';
+
+function getCookie(name) {{
   const v = document.cookie.match('(^|;) ?' + name + '=([^;]*)(;|$)');
   return v ? v[2] : null;
-}
+}}
 
-function downloadTemplate() {
+function downloadTemplate() {{
   const content = 'supplier,sku\\nmouser,667-ERJ-3EKF1001V\\ndigikey,311-1.00KCRCT-ND\\nfarnell,1469817\\nrs,123-4567\\n';
   const a = document.createElement('a');
   a.href = 'data:text/csv,' + encodeURIComponent(content);
   a.download = 'import_template.csv';
   a.click();
-}
+}}
 
-function uploadCsv() {
-  const fileInput = document.getElementById('csv-file');
-  const file = fileInput.files[0];
-  if (!file) { alert('Please select a CSV file.'); return; }
+function uploadCsv() {{
+  const file = document.getElementById('csv-file').files[0];
+  if (!file) {{ alert('Veuillez sélectionner un fichier CSV.'); return; }}
 
   const formData = new FormData();
   formData.append('csv_file', file);
 
-  document.getElementById('progress').style.display = 'block';
-  document.getElementById('summary').style.display = 'none';
+  document.getElementById('progress').classList.remove('d-none');
+  document.getElementById('summary').innerHTML = '';
   document.getElementById('results-table').innerHTML = '';
 
-  fetch('/plugin/supplier-import/import-csv/', {
+  fetch(`/plugin/${{SLUG}}/import-csv/`, {{
     method: 'POST',
-    headers: {'X-CSRFToken': getCookie('csrftoken')},
+    headers: {{ 'X-CSRFToken': getCookie('csrftoken') }},
     body: formData,
-  })
+  }})
   .then(r => r.json())
-  .then(data => {
-    document.getElementById('progress').style.display = 'none';
-    const summDiv = document.getElementById('summary');
-    summDiv.style.display = 'block';
-    summDiv.innerHTML = `
-      <div class="alert ${data.failed === 0 ? 'alert-success' : 'alert-warning'}">
-        <strong>Done!</strong>
-        ${data.imported}/${data.total} parts imported successfully.
-        ${data.failed > 0 ? `<br>${data.failed} error(s) — see table below.` : ''}
+  .then(data => {{
+    document.getElementById('progress').classList.add('d-none');
+    const allOk = data.failed === 0;
+    document.getElementById('summary').innerHTML = `
+      <div class="alert ${{allOk ? 'alert-success' : 'alert-warning'}}">
+        <strong>Terminé !</strong>
+        ${{data.imported}}/${{data.total}} composants importés.
+        ${{data.failed > 0 ? `<br>${{data.failed}} erreur(s) — voir tableau ci-dessous.` : ''}}
       </div>`;
 
-    // Build results table
-    let rows = data.results.map(r => `
-      <tr class="${r.success ? 'result-row-ok' : 'result-row-err'}">
-        <td>${r.supplier}</td>
-        <td><code>${r.sku}</code></td>
-        <td>${r.success ? '✓' : '✗'}</td>
-        <td>${r.ipn || ''}</td>
-        <td>${r.part_pk ? '<a href="/part/' + r.part_pk + '/" target="_blank">Open →</a>' : ''}</td>
-        <td><small>${r.error || ''}</small></td>
+    const rows = data.results.map(r => `
+      <tr class="${{r.success ? 'result-ok' : 'result-err'}}">
+        <td>${{r.supplier}}</td>
+        <td><code>${{r.sku}}</code></td>
+        <td>${{r.success ? '✓' : '✗'}}</td>
+        <td>${{r.ipn || ''}}</td>
+        <td>${{r.part_pk ? `<a href="/part/${{r.part_pk}}/" target="_blank">Ouvrir →</a>` : ''}}</td>
+        <td><small class="text-danger">${{r.error || ''}}</small></td>
       </tr>`).join('');
 
     document.getElementById('results-table').innerHTML = `
       <table class="table table-sm table-bordered">
-        <thead class="thead-light">
-          <tr>
-            <th>Supplier</th><th>SKU</th><th>Status</th>
-            <th>IPN</th><th>Link</th><th>Details</th>
-          </tr>
+        <thead class="table-light">
+          <tr><th>Fournisseur</th><th>SKU</th><th>Statut</th><th>IPN</th><th>Lien</th><th>Détail</th></tr>
         </thead>
-        <tbody>${rows}</tbody>
+        <tbody>${{rows}}</tbody>
       </table>`;
-  })
-  .catch(err => {
-    document.getElementById('progress').style.display = 'none';
+  }})
+  .catch(err => {{
+    document.getElementById('progress').classList.add('d-none');
     document.getElementById('summary').innerHTML =
-      `<div class="alert alert-danger">Request failed: ${err}</div>`;
-    document.getElementById('summary').style.display = 'block';
-  });
-}
+      `<div class="alert alert-danger">Erreur : ${{err}}</div>`;
+  }});
+}}
 </script>
 </body>
-</html>
-"""
-            return HttpResponse(html)
+</html>"""
+    return HttpResponse(html)

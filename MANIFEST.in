@@ -1,0 +1,2 @@
+recursive-include static *.js *.css
+include README.md
