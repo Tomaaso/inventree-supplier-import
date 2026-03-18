@@ -12,7 +12,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.urls import path
 
 from plugin import InvenTreePlugin
-from plugin.mixins import SettingsMixin, UrlsMixin, UserInterfaceMixin
+from plugin.mixins import SettingsMixin, UrlsMixin, UserInterfaceMixin, NavigationMixin
 
 from .importer import create_part_from_supplier_data
 from .suppliers.mouser import MouserSupplier
@@ -24,7 +24,7 @@ logger = logging.getLogger('inventree')
 PLUGIN_VERSION = '2.1.0'
 
 
-class SupplierImportPlugin(InvenTreePlugin, UserInterfaceMixin, SettingsMixin, UrlsMixin):
+class SupplierImportPlugin(InvenTreePlugin, NavigationMixin, UserInterfaceMixin, SettingsMixin, UrlsMixin):
 
     NAME = 'SupplierImport'
     SLUG = 'supplier-import'
@@ -33,6 +33,11 @@ class SupplierImportPlugin(InvenTreePlugin, UserInterfaceMixin, SettingsMixin, U
     VERSION = PLUGIN_VERSION
     AUTHOR = 'Your Lab'
     MIN_VERSION = '1.0.0'
+    NAVIGATION = [
+        {'name': 'Import Fournisseur', 'link': 'plugin:supplier-import:import-page', 'icon': 'fas fa-download'},
+    ]
+    NAVIGATION_TAB_NAME = 'Import Fournisseur'
+    NAVIGATION_TAB_ICON = 'fas fa-download'
 
     SETTINGS = {
         'IPN_PREFIX': {'name': 'IPN Prefix', 'description': 'Prefix IPN (ex: LAB -> LAB-0001)', 'default': 'LAB'},
