@@ -12,17 +12,15 @@ class FarnellSupplier:
         self.store = store
 
     def fetch_part(self, sku: str) -> dict | None:
-        """Fetch part data from Farnell/Element14 API by SKU."""
+        """Fetch part by Farnell stock number using term=id:<sku>."""
         params = {
-            "callInfo.omitXmlSchema": "false",
-            "callInfo.responseDataFormat": "JSON",
-            "callInfo.apiKey": self.api_key,
-            "callInfo.storeInfo.id": self.store,
-            "searchInfo.sku": sku,
+            "term": f"id:{sku}",
+            "storeInfo.id": self.store,
             "resultsSettings.offset": 0,
             "resultsSettings.numberOfResults": 1,
-            "resultsSettings.refinements.filters": "rohsCompliant",
             "resultsSettings.responseGroup": "large",
+            "callInfo.responseDataFormat": "JSON",
+            "callInfo.apiKey": self.api_key,
         }
         resp = requests.get(self.BASE_URL, params=params, timeout=10)
         resp.raise_for_status()
@@ -30,7 +28,7 @@ class FarnellSupplier:
 
         products = (
             data.get("keywordSearchReturn", {})
-            .get("products", [])
+                .get("products", [])
         )
         if not products:
             return None
@@ -49,13 +47,13 @@ class FarnellSupplier:
                 continue
 
         return {
-            "name": p.get("translatedManufacturerPartNumber", sku),
+            "name": p.get("translatedManufacturerPartNumber") or p.get("sku", sku),
             "description": p.get("displayName", ""),
             "manufacturer": p.get("vendorName", ""),
             "supplier_sku": p.get("sku", sku),
             "supplier_name": self.NAME,
-            "datasheet": p.get("datasheets", [{}])[0].get("url", "") if p.get("datasheets") else "",
-            "image": p.get("image", {}).get("vrntPath", ""),
+            "datasheet": (p.get("datasheets") or [{}])[0].get("url", ""),
+            "image": (p.get("imageUrl") or ""),
             "category_path": p.get("categoryNamePath", ""),
             "stock": p.get("stock", {}).get("level", ""),
             "price_breaks": price_breaks,
