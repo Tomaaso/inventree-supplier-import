@@ -100,8 +100,8 @@ class SupplierImportPlugin(UserInterfaceMixin, SettingsMixin, UrlsMixin, InvenTr
                 'title': 'Import Fournisseur',
                 'description': 'Importer depuis un SKU fournisseur',
                 'icon': 'ti:download:outline',
-                # Fichier JS compilé dans static/
-                'source': self.plugin_static_file('SupplierImportPanel.js:renderSupplierImportPanel'),
+                # JS servi directement via une URL du plugin (pas de collectstatic requis)
+                'source': f'/plugin/{self.SLUG}/panel-js/:renderSupplierImportPanel',
                 # Données passées au JS via context.context
                 'context': {
                     'slug': self.SLUG,
@@ -127,6 +127,7 @@ class SupplierImportPlugin(UserInterfaceMixin, SettingsMixin, UrlsMixin, InvenTr
             path('import-sku/', csrf_exempt(lambda request: _import_sku_view(request, plugin)), name='import-sku'),
             path('import-csv/', csrf_exempt(lambda request: _import_csv_view(request, plugin)), name='import-csv'),
             path('csv-page/', lambda request: _csv_page_view(request, plugin), name='csv-page'),
+            path('panel-js/', lambda request: _panel_js_view(request), name='panel-js'),
         ]
 
     # ------------------------------------------------------------------ #
@@ -224,6 +225,107 @@ def _import_csv_view(request, plugin: SupplierImportPlugin):
     total = len(results)
     ok = sum(1 for r in results if r.get('success'))
     return JsonResponse({'total': total, 'imported': ok, 'failed': total - ok, 'results': results})
+
+
+def _panel_js_view(request):
+    """Sert le fichier JS du panel directement via une URL — évite le besoin de collectstatic."""
+    import os
+    js_path = os.path.join(os.path.dirname(__file__), '..', 'static', 'SupplierImportPanel.js')
+    js_path = os.path.normpath(js_path)
+    try:
+        with open(js_path, 'r', encoding='utf-8') as f:
+            js_content = f.read()
+    except FileNotFoundError:
+        # Fallback : JS embarqué directement si le fichier statique est absent
+        js_content = _PANEL_JS_INLINE
+    return HttpResponse(js_content, content_type='application/javascript')
+
+
+# JS embarqué en fallback (identique à static/SupplierImportPanel.js)
+_PANEL_JS_INLINE = r"""
+function renderSupplierImportPanel(target, context) {
+  const apiUrl = (context.context && context.context.api_url) || '/plugin/supplier-import/import-sku/';
+  const csvUrl = (context.context && context.context.csv_page_url) || '/plugin/supplier-import/csv-page/';
+
+  target.innerHTML = `
+    <div style="padding: 16px; max-width: 560px; font-family: inherit;">
+      <div style="margin-bottom: 14px;">
+        <a href="${csvUrl}" target="_blank"
+           style="font-size: 0.85em; color: #666; text-decoration: none;">
+          📄 Import en masse (CSV) →
+        </a>
+      </div>
+      <div style="margin-bottom: 10px;">
+        <label style="font-weight: 600; display: block; margin-bottom: 4px;">Fournisseur</label>
+        <select id="si-supplier" style="width: 100%; padding: 6px 10px; border: 1px solid #ccc; border-radius: 4px;">
+          <option value="mouser">Mouser</option>
+          <option value="digikey">DigiKey</option>
+          <option value="farnell">Farnell</option>
+          <option value="rs">RS Components</option>
+        </select>
+      </div>
+      <div style="margin-bottom: 12px;">
+        <label style="font-weight: 600; display: block; margin-bottom: 4px;">SKU / Référence fournisseur</label>
+        <input id="si-sku" type="text" placeholder="ex : 667-ERJ-3EKF1001V"
+               style="width: 100%; padding: 6px 10px; border: 1px solid #ccc; border-radius: 4px;"/>
+      </div>
+      <button id="si-btn"
+              style="padding: 8px 18px; background: #1c7ed6; color: white; border: none;
+                     border-radius: 4px; cursor: pointer; font-size: 0.95em;">
+        ⬇ Importer le composant
+      </button>
+      <div id="si-result" style="margin-top: 14px;"></div>
+    </div>
+  `;
+
+  const btn = target.querySelector('#si-btn');
+  btn.addEventListener('click', () => {
+    const supplier = target.querySelector('#si-supplier').value;
+    const sku = target.querySelector('#si-sku').value.trim();
+    const resultDiv = target.querySelector('#si-result');
+
+    if (!sku) {
+      resultDiv.innerHTML = '<div style="color:#e67700;padding:8px;background:#fff3bf;border-radius:4px;">Veuillez saisir un SKU.</div>';
+      return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = '⏳ Import en cours…';
+    resultDiv.innerHTML = '';
+
+    const csrfMatch = document.cookie.match('(^|;) ?csrftoken=([^;]*)(;|$)');
+    const csrfToken = csrfMatch ? csrfMatch[2] : '';
+
+    fetch(apiUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrfToken },
+      body: JSON.stringify({ supplier, sku }),
+    })
+    .then(r => r.json())
+    .then(data => {
+      btn.disabled = false;
+      btn.textContent = '⬇ Importer le composant';
+      if (data.success) {
+        resultDiv.innerHTML = `
+          <div style="padding:10px;background:#d3f9d8;border-radius:4px;color:#2b8a3e;">
+            ✅ <strong>Composant créé !</strong> IPN : <code>${data.ipn}</code>
+            &nbsp;— <a href="/part/${data.part_pk}/" target="_blank" style="color:#2b8a3e;">Ouvrir →</a>
+          </div>`;
+      } else {
+        resultDiv.innerHTML = `
+          <div style="padding:10px;background:#ffe3e3;border-radius:4px;color:#c92a2a;">
+            ❌ <strong>Erreur :</strong> ${data.error || 'Erreur inconnue'}
+          </div>`;
+      }
+    })
+    .catch(err => {
+      btn.disabled = false;
+      btn.textContent = '⬇ Importer le composant';
+      resultDiv.innerHTML = `<div style="padding:10px;background:#ffe3e3;border-radius:4px;color:#c92a2a;">❌ ${err}</div>`;
+    });
+  });
+}
+"""
 
 
 def _csv_page_view(request, plugin: SupplierImportPlugin):
