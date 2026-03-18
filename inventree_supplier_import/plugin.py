@@ -48,14 +48,6 @@ class SupplierImportPlugin(InvenTreePlugin, NavigationMixin, UserInterfaceMixin,
         'RS_API_KEY': {'name': 'RS Components API Key', 'default': '', 'protected': True},
     }
 
-    def get_ui_navigation_items(self, request, context: dict, **kwargs):
-        return [{
-            'key': 'supplier-import-nav',
-            'title': 'Import Fournisseur',
-            'icon': 'ti:download:outline',
-            'link': f'/plugin/{self.SLUG}/import-page/',
-        }]
-
     def setup_urls(self):
         plugin = self
         return [
