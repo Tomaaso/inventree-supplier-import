@@ -1,15 +1,5 @@
 """
-InvenTree Supplier Import Plugin — compatible InvenTree >= 1.0
---------------------------------------------------------------
-Utilise UserInterfaceMixin (remplace PanelMixin supprimé en 1.0).
-
-Deux points d'entrée :
-  - Panel sur la page Part : import unitaire par SKU
-  - Page dédiée CSV      : /plugin/supplier-import/csv-page/
-
-Settings (Admin → Plugins → SupplierImport → Settings) :
-  IPN_PREFIX, MOUSER_API_KEY, DIGIKEY_CLIENT_ID,
-  DIGIKEY_CLIENT_SECRET, FARNELL_API_KEY, RS_API_KEY
+InvenTree Supplier Import Plugin - compatible InvenTree >= 1.0
 """
 
 import csv
@@ -18,8 +8,6 @@ import json
 import logging
 
 from django.http import HttpResponse, JsonResponse
-from django.views import View
-from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
 from django.urls import path
 
@@ -33,106 +21,44 @@ from .suppliers.farnell import FarnellSupplier
 from .suppliers.rs import RSSupplier
 
 logger = logging.getLogger('inventree')
-
-PLUGIN_VERSION = '2.0.0'
+PLUGIN_VERSION = '2.1.0'
 
 
 class SupplierImportPlugin(InvenTreePlugin, UserInterfaceMixin, SettingsMixin, UrlsMixin):
 
     NAME = 'SupplierImport'
     SLUG = 'supplier-import'
-    TITLE = 'Supplier Part Importer'
+    TITLE = 'Import Fournisseur'
     DESCRIPTION = 'Import parts from Mouser, DigiKey, Farnell and RS Components via SKU'
     VERSION = PLUGIN_VERSION
     AUTHOR = 'Your Lab'
     MIN_VERSION = '1.0.0'
 
-    # ------------------------------------------------------------------ #
-    #  Settings                                                            #
-    # ------------------------------------------------------------------ #
     SETTINGS = {
-        'IPN_PREFIX': {
-            'name': 'IPN Prefix',
-            'description': 'Prefix used for auto-generated IPN (e.g. LAB → LAB-0001)',
-            'default': 'LAB',
-        },
-        'MOUSER_API_KEY': {
-            'name': 'Mouser API Key',
-            'description': 'Mouser part search API key',
-            'default': '',
-            'protected': True,
-        },
-        'DIGIKEY_CLIENT_ID': {
-            'name': 'DigiKey Client ID',
-            'description': 'DigiKey OAuth2 client ID',
-            'default': '',
-            'protected': True,
-        },
-        'DIGIKEY_CLIENT_SECRET': {
-            'name': 'DigiKey Client Secret',
-            'description': 'DigiKey OAuth2 client secret',
-            'default': '',
-            'protected': True,
-        },
-        'FARNELL_API_KEY': {
-            'name': 'Farnell API Key',
-            'description': 'Farnell / Element14 API key',
-            'default': '',
-            'protected': True,
-        },
-        'RS_API_KEY': {
-            'name': 'RS Components API Key',
-            'description': 'RS Components API key',
-            'default': '',
-            'protected': True,
-        },
+        'IPN_PREFIX': {'name': 'IPN Prefix', 'description': 'Prefix IPN (ex: LAB -> LAB-0001)', 'default': 'LAB'},
+        'MOUSER_API_KEY': {'name': 'Mouser API Key', 'default': '', 'protected': True},
+        'DIGIKEY_CLIENT_ID': {'name': 'DigiKey Client ID', 'default': '', 'protected': True},
+        'DIGIKEY_CLIENT_SECRET': {'name': 'DigiKey Client Secret', 'default': '', 'protected': True},
+        'FARNELL_API_KEY': {'name': 'Farnell API Key', 'default': '', 'protected': True},
+        'RS_API_KEY': {'name': 'RS Components API Key', 'default': '', 'protected': True},
     }
 
-    # ------------------------------------------------------------------ #
-    #  UserInterfaceMixin — panel sur la page Part                        #
-    # ------------------------------------------------------------------ #
-    def get_ui_panels(self, request, context: dict, **kwargs):
-        """Injecte le panel d'import SKU sur la page détail d'une Part."""
-        panels = []
-        if context.get('target_model') == 'part':
-            panels.append({
-                'key': 'supplier-import-panel',
-                'title': 'Import Fournisseur',
-                'description': 'Importer depuis un SKU fournisseur',
-                'icon': 'ti:download:outline',
-                # JS servi directement via une URL du plugin (pas de collectstatic requis)
-                'source': f'/plugin/{self.SLUG}/panel-js/:renderSupplierImportPanel',
-                # Données passées au JS via context.context
-                'context': {
-                    'slug': self.SLUG,
-                    'api_url': f'/plugin/{self.SLUG}/import-sku/',
-                    'csv_page_url': f'/plugin/{self.SLUG}/csv-page/',
-                },
-            })
-        return panels
-
-    # ------------------------------------------------------------------ #
-    #  URLs                                                                #
-    # ------------------------------------------------------------------ #
-    URLS = [
-        path('import-sku/', csrf_exempt(lambda request, plugin=None: _import_sku_view(request, plugin)), name='import-sku'),
-        path('import-csv/', csrf_exempt(lambda request, plugin=None: _import_csv_view(request, plugin)), name='import-csv'),
-        path('csv-page/', lambda request, plugin=None: _csv_page_view(request, plugin), name='csv-page'),
-    ]
+    def get_ui_navigation_items(self, request, context: dict, **kwargs):
+        return [{
+            'key': 'supplier-import-nav',
+            'title': 'Import Fournisseur',
+            'icon': 'ti:download:outline',
+            'link': f'/plugin/{self.SLUG}/import-page/',
+        }]
 
     def setup_urls(self):
-        """Bind URL handlers with plugin instance."""
         plugin = self
         return [
+            path('import-page/', lambda request: _import_page_view(request, plugin), name='import-page'),
             path('import-sku/', csrf_exempt(lambda request: _import_sku_view(request, plugin)), name='import-sku'),
             path('import-csv/', csrf_exempt(lambda request: _import_csv_view(request, plugin)), name='import-csv'),
-            path('csv-page/', lambda request: _csv_page_view(request, plugin), name='csv-page'),
-            path('panel-js/', lambda request: _panel_js_view(request), name='panel-js'),
         ]
 
-    # ------------------------------------------------------------------ #
-    #  Helper: instancier le bon adapter fournisseur                      #
-    # ------------------------------------------------------------------ #
     def get_supplier(self, name: str):
         n = name.lower().strip()
         if n == 'mouser':
@@ -149,12 +75,109 @@ class SupplierImportPlugin(InvenTreePlugin, UserInterfaceMixin, SettingsMixin, U
         return None
 
 
-# ------------------------------------------------------------------ #
-#  Vues standalone (fonctions pour éviter les problèmes de binding)   #
-# ------------------------------------------------------------------ #
+def _import_page_view(request, plugin):
+    slug = plugin.SLUG
+    html = (
+        '<!doctype html><html lang="fr"><head><meta charset="utf-8">'
+        '<title>Import Fournisseur</title>'
+        '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css">'
+        '<style>body{padding:2rem;background:#f8f9fa}.main-card{max-width:800px;margin:auto}'
+        '.result-ok{background:#d1e7dd}.result-err{background:#f8d7da}</style>'
+        '</head><body><div class="main-card"><div class="card shadow-sm">'
+        '<div class="card-header bg-primary text-white"><h5 class="mb-0">Import de composants fournisseurs</h5></div>'
+        '<div class="card-body">'
+        '<ul class="nav nav-tabs mb-4">'
+        '<li class="nav-item"><button class="nav-link active" id="btn-single" onclick="showTab(\'single\')">Import unitaire (SKU)</button></li>'
+        '<li class="nav-item"><button class="nav-link" id="btn-csv" onclick="showTab(\'csv\')">Import en masse (CSV)</button></li>'
+        '</ul>'
+        '<div id="tab-single">'
+        '<div class="mb-3"><label class="form-label fw-semibold">Fournisseur</label>'
+        '<select id="si-supplier" class="form-select">'
+        '<option value="mouser">Mouser</option><option value="digikey">DigiKey</option>'
+        '<option value="farnell">Farnell</option><option value="rs">RS Components</option>'
+        '</select></div>'
+        '<div class="mb-3"><label class="form-label fw-semibold">SKU</label>'
+        '<input id="si-sku" type="text" class="form-control" placeholder="ex: 667-ERJ-3EKF1001V"></div>'
+        '<button class="btn btn-primary" onclick="importSku()">Importer le composant</button>'
+        '<div id="si-result" class="mt-3"></div>'
+        '</div>'
+        '<div id="tab-csv" style="display:none">'
+        '<p class="text-muted">CSV avec colonnes <code>supplier</code> et <code>sku</code>. '
+        'Valeurs : mouser, digikey, farnell, rs</p>'
+        '<div class="mb-3"><input type="file" id="csv-file" accept=".csv" class="form-control"></div>'
+        '<div class="d-flex gap-2 mb-3">'
+        '<button class="btn btn-primary" onclick="importCsv()">Importer</button>'
+        '<button class="btn btn-outline-secondary" onclick="dlTemplate()">Template CSV</button>'
+        '</div>'
+        '<div id="csv-progress" class="d-none"><div class="alert alert-info">Import en cours...</div></div>'
+        '<div id="csv-summary"></div><div id="csv-results" class="mt-3"></div>'
+        '</div></div></div></div>'
+    )
 
-def _import_sku_view(request, plugin: SupplierImportPlugin):
-    """POST {supplier, sku} → crée Part + SupplierPart + PriceBreaks."""
+    js = f"""
+<script>
+const SLUG = '{slug}';
+function csrf(){{const m=document.cookie.match('(^|;) ?csrftoken=([^;]*)(;|$)');return m?m[2]:'';}}
+function showTab(t){{
+  document.getElementById('tab-single').style.display=t==='single'?'':'none';
+  document.getElementById('tab-csv').style.display=t==='csv'?'':'none';
+  document.getElementById('btn-single').classList.toggle('active',t==='single');
+  document.getElementById('btn-csv').classList.toggle('active',t==='csv');
+}}
+function importSku(){{
+  const supplier=document.getElementById('si-supplier').value;
+  const sku=document.getElementById('si-sku').value.trim();
+  const res=document.getElementById('si-result');
+  if(!sku){{res.innerHTML='<div class="alert alert-warning">Saisir un SKU.</div>';return;}}
+  res.innerHTML='<div class="alert alert-info">Import en cours...</div>';
+  fetch('/plugin/'+SLUG+'/import-sku/',{{
+    method:'POST',
+    headers:{{'Content-Type':'application/json','X-CSRFToken':csrf()}},
+    body:JSON.stringify({{supplier,sku}})
+  }}).then(r=>r.json()).then(d=>{{
+    if(d.success){{
+      res.innerHTML='<div class="alert alert-success">Composant cree ! IPN: <code>'+d.ipn+'</code> &mdash; <a href="/part/'+d.part_pk+'/" target="_blank">Ouvrir</a></div>';
+    }}else{{
+      res.innerHTML='<div class="alert alert-danger">Erreur: '+( d.error||'inconnue')+'</div>';
+    }}
+  }}).catch(e=>{{res.innerHTML='<div class="alert alert-danger">'+e+'</div>';}});
+}}
+function dlTemplate(){{
+  const c='supplier,sku\\nmouser,667-ERJ-3EKF1001V\\ndigikey,311-1.00KCRCT-ND\\nfarnell,1469817\\nrs,123-4567\\n';
+  const a=document.createElement('a');a.href='data:text/csv,'+encodeURIComponent(c);a.download='template.csv';a.click();
+}}
+function importCsv(){{
+  const file=document.getElementById('csv-file').files[0];
+  if(!file){{alert('Selectionner un CSV');return;}}
+  const fd=new FormData();fd.append('csv_file',file);
+  document.getElementById('csv-progress').classList.remove('d-none');
+  document.getElementById('csv-summary').innerHTML='';
+  document.getElementById('csv-results').innerHTML='';
+  fetch('/plugin/'+SLUG+'/import-csv/',{{method:'POST',headers:{{'X-CSRFToken':csrf()}},body:fd}})
+  .then(r=>r.json()).then(data=>{{
+    document.getElementById('csv-progress').classList.add('d-none');
+    document.getElementById('csv-summary').innerHTML=
+      '<div class="alert '+(data.failed===0?'alert-success':'alert-warning')+'">'+
+      data.imported+'/'+data.total+' composes importes.'+(data.failed>0?' '+data.failed+' erreur(s).':'')+'</div>';
+    const rows=data.results.map(r=>
+      '<tr class="'+(r.success?'result-ok':'result-err')+'"><td>'+r.supplier+'</td><td><code>'+r.sku+'</code></td>'+
+      '<td>'+(r.success?'OK':'ERR')+'</td><td>'+(r.ipn||'')+'</td>'+
+      '<td>'+(r.part_pk?'<a href="/part/'+r.part_pk+'/" target="_blank">Ouvrir</a>':'')+'</td>'+
+      '<td><small>'+(r.error||'')+'</small></td></tr>').join('');
+    if(rows)document.getElementById('csv-results').innerHTML=
+      '<table class="table table-sm table-bordered"><thead class="table-light">'+
+      '<tr><th>Fourn.</th><th>SKU</th><th>Statut</th><th>IPN</th><th>Lien</th><th>Detail</th></tr>'+
+      '</thead><tbody>'+rows+'</tbody></table>';
+  }}).catch(e=>{{
+    document.getElementById('csv-progress').classList.add('d-none');
+    document.getElementById('csv-summary').innerHTML='<div class="alert alert-danger">'+e+'</div>';
+  }});
+}}
+</script></body></html>"""
+    return HttpResponse(html + js)
+
+
+def _import_sku_view(request, plugin):
     if request.method != 'POST':
         return JsonResponse({'error': 'POST required'}, status=405)
     try:
@@ -163,285 +186,49 @@ def _import_sku_view(request, plugin: SupplierImportPlugin):
         sku = body.get('sku', '').strip()
     except Exception:
         return JsonResponse({'success': False, 'error': 'Invalid JSON'}, status=400)
-
     if not supplier_name or not sku:
-        return JsonResponse({'success': False, 'error': 'supplier and sku are required'}, status=400)
-
+        return JsonResponse({'success': False, 'error': 'supplier and sku required'}, status=400)
     supplier = plugin.get_supplier(supplier_name)
     if supplier is None:
         return JsonResponse({'success': False, 'error': f'Unknown supplier: {supplier_name}'}, status=400)
-
     part_data = supplier.fetch_part(sku)
     if part_data is None:
         return JsonResponse({'success': False, 'error': f"SKU '{sku}' not found at {supplier_name}"})
-
     prefix = plugin.get_setting('IPN_PREFIX') or 'LAB'
     result = create_part_from_supplier_data(request, part_data, prefix)
     return JsonResponse(result)
 
 
-def _import_csv_view(request, plugin: SupplierImportPlugin):
-    """POST multipart/form-data avec csv_file → import en masse."""
+def _import_csv_view(request, plugin):
     if request.method != 'POST':
         return JsonResponse({'error': 'POST required'}, status=405)
-
     csv_file = request.FILES.get('csv_file')
     if not csv_file:
         return JsonResponse({'success': False, 'error': 'No file uploaded'}, status=400)
-
     text = csv_file.read().decode('utf-8-sig')
     reader = csv.DictReader(io.StringIO(text))
     results = []
     prefix = plugin.get_setting('IPN_PREFIX') or 'LAB'
-
     for row in reader:
         row = {k.lower().strip(): v.strip() for k, v in row.items()}
         supplier_name = row.get('supplier', '')
         sku = row.get('sku', '')
-
         if not supplier_name or not sku:
-            results.append({'sku': sku or '?', 'supplier': supplier_name or '?',
-                            'success': False, 'error': 'Missing supplier or sku'})
+            results.append({'sku': sku or '?', 'supplier': supplier_name or '?', 'success': False, 'error': 'Missing supplier or sku'})
             continue
-
         supplier = plugin.get_supplier(supplier_name)
         if supplier is None:
-            results.append({'sku': sku, 'supplier': supplier_name,
-                            'success': False, 'error': f'Unknown supplier: {supplier_name}'})
+            results.append({'sku': sku, 'supplier': supplier_name, 'success': False, 'error': f'Unknown supplier: {supplier_name}'})
             continue
-
         try:
             part_data = supplier.fetch_part(sku)
             if part_data is None:
-                results.append({'sku': sku, 'supplier': supplier_name,
-                                'success': False, 'error': 'SKU not found'})
+                results.append({'sku': sku, 'supplier': supplier_name, 'success': False, 'error': 'SKU not found'})
                 continue
             result = create_part_from_supplier_data(request, part_data, prefix)
             results.append({'sku': sku, 'supplier': supplier_name, **result})
         except Exception as e:
-            results.append({'sku': sku, 'supplier': supplier_name,
-                            'success': False, 'error': str(e)})
-
+            results.append({'sku': sku, 'supplier': supplier_name, 'success': False, 'error': str(e)})
     total = len(results)
     ok = sum(1 for r in results if r.get('success'))
     return JsonResponse({'total': total, 'imported': ok, 'failed': total - ok, 'results': results})
-
-
-def _panel_js_view(request):
-    """Sert le fichier JS du panel directement via une URL — évite le besoin de collectstatic."""
-    import os
-    js_path = os.path.join(os.path.dirname(__file__), '..', 'static', 'SupplierImportPanel.js')
-    js_path = os.path.normpath(js_path)
-    try:
-        with open(js_path, 'r', encoding='utf-8') as f:
-            js_content = f.read()
-    except FileNotFoundError:
-        # Fallback : JS embarqué directement si le fichier statique est absent
-        js_content = _PANEL_JS_INLINE
-    return HttpResponse(js_content, content_type='application/javascript')
-
-
-# JS embarqué en fallback (identique à static/SupplierImportPanel.js)
-_PANEL_JS_INLINE = r"""
-function renderSupplierImportPanel(target, context) {
-  const apiUrl = (context.context && context.context.api_url) || '/plugin/supplier-import/import-sku/';
-  const csvUrl = (context.context && context.context.csv_page_url) || '/plugin/supplier-import/csv-page/';
-
-  target.innerHTML = `
-    <div style="padding: 16px; max-width: 560px; font-family: inherit;">
-      <div style="margin-bottom: 14px;">
-        <a href="${csvUrl}" target="_blank"
-           style="font-size: 0.85em; color: #666; text-decoration: none;">
-          📄 Import en masse (CSV) →
-        </a>
-      </div>
-      <div style="margin-bottom: 10px;">
-        <label style="font-weight: 600; display: block; margin-bottom: 4px;">Fournisseur</label>
-        <select id="si-supplier" style="width: 100%; padding: 6px 10px; border: 1px solid #ccc; border-radius: 4px;">
-          <option value="mouser">Mouser</option>
-          <option value="digikey">DigiKey</option>
-          <option value="farnell">Farnell</option>
-          <option value="rs">RS Components</option>
-        </select>
-      </div>
-      <div style="margin-bottom: 12px;">
-        <label style="font-weight: 600; display: block; margin-bottom: 4px;">SKU / Référence fournisseur</label>
-        <input id="si-sku" type="text" placeholder="ex : 667-ERJ-3EKF1001V"
-               style="width: 100%; padding: 6px 10px; border: 1px solid #ccc; border-radius: 4px;"/>
-      </div>
-      <button id="si-btn"
-              style="padding: 8px 18px; background: #1c7ed6; color: white; border: none;
-                     border-radius: 4px; cursor: pointer; font-size: 0.95em;">
-        ⬇ Importer le composant
-      </button>
-      <div id="si-result" style="margin-top: 14px;"></div>
-    </div>
-  `;
-
-  const btn = target.querySelector('#si-btn');
-  btn.addEventListener('click', () => {
-    const supplier = target.querySelector('#si-supplier').value;
-    const sku = target.querySelector('#si-sku').value.trim();
-    const resultDiv = target.querySelector('#si-result');
-
-    if (!sku) {
-      resultDiv.innerHTML = '<div style="color:#e67700;padding:8px;background:#fff3bf;border-radius:4px;">Veuillez saisir un SKU.</div>';
-      return;
-    }
-
-    btn.disabled = true;
-    btn.textContent = '⏳ Import en cours…';
-    resultDiv.innerHTML = '';
-
-    const csrfMatch = document.cookie.match('(^|;) ?csrftoken=([^;]*)(;|$)');
-    const csrfToken = csrfMatch ? csrfMatch[2] : '';
-
-    fetch(apiUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrfToken },
-      body: JSON.stringify({ supplier, sku }),
-    })
-    .then(r => r.json())
-    .then(data => {
-      btn.disabled = false;
-      btn.textContent = '⬇ Importer le composant';
-      if (data.success) {
-        resultDiv.innerHTML = `
-          <div style="padding:10px;background:#d3f9d8;border-radius:4px;color:#2b8a3e;">
-            ✅ <strong>Composant créé !</strong> IPN : <code>${data.ipn}</code>
-            &nbsp;— <a href="/part/${data.part_pk}/" target="_blank" style="color:#2b8a3e;">Ouvrir →</a>
-          </div>`;
-      } else {
-        resultDiv.innerHTML = `
-          <div style="padding:10px;background:#ffe3e3;border-radius:4px;color:#c92a2a;">
-            ❌ <strong>Erreur :</strong> ${data.error || 'Erreur inconnue'}
-          </div>`;
-      }
-    })
-    .catch(err => {
-      btn.disabled = false;
-      btn.textContent = '⬇ Importer le composant';
-      resultDiv.innerHTML = `<div style="padding:10px;background:#ffe3e3;border-radius:4px;color:#c92a2a;">❌ ${err}</div>`;
-    });
-  });
-}
-"""
-
-
-def _csv_page_view(request, plugin: SupplierImportPlugin):
-    """Page HTML autonome pour l'import CSV en masse."""
-    slug = plugin.SLUG
-    html = f"""<!doctype html>
-<html lang="fr">
-<head>
-  <meta charset="utf-8">
-  <title>Import CSV Fournisseurs — InvenTree</title>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css">
-  <style>
-    body {{ padding: 2rem; background: #f8f9fa; }}
-    .card {{ max-width: 760px; margin: auto; }}
-    .result-ok  {{ background: #d1e7dd; }}
-    .result-err {{ background: #f8d7da; }}
-    code {{ font-size: 0.85em; }}
-  </style>
-</head>
-<body>
-<div class="card shadow-sm">
-  <div class="card-header bg-primary text-white fw-bold">
-    📦 Import CSV — Composants fournisseurs
-  </div>
-  <div class="card-body">
-    <p class="text-muted mb-3">
-      Fichier CSV avec les colonnes <code>supplier</code> et <code>sku</code>.<br>
-      Valeurs acceptées pour supplier : <strong>mouser, digikey, farnell, rs</strong>
-    </p>
-
-    <div class="mb-3">
-      <label class="form-label fw-semibold">Fichier CSV</label>
-      <input type="file" id="csv-file" accept=".csv" class="form-control">
-    </div>
-
-    <div class="d-flex gap-2 mb-3">
-      <button class="btn btn-primary" onclick="uploadCsv()">⬆ Importer</button>
-      <button class="btn btn-outline-secondary" onclick="downloadTemplate()">⬇ Template CSV</button>
-    </div>
-
-    <div id="progress" class="d-none">
-      <div class="alert alert-info">⏳ Import en cours…</div>
-    </div>
-    <div id="summary"></div>
-    <div id="results-table" class="mt-3"></div>
-  </div>
-</div>
-
-<script>
-const SLUG = '{slug}';
-
-function getCookie(name) {{
-  const v = document.cookie.match('(^|;) ?' + name + '=([^;]*)(;|$)');
-  return v ? v[2] : null;
-}}
-
-function downloadTemplate() {{
-  const content = 'supplier,sku\\nmouser,667-ERJ-3EKF1001V\\ndigikey,311-1.00KCRCT-ND\\nfarnell,1469817\\nrs,123-4567\\n';
-  const a = document.createElement('a');
-  a.href = 'data:text/csv,' + encodeURIComponent(content);
-  a.download = 'import_template.csv';
-  a.click();
-}}
-
-function uploadCsv() {{
-  const file = document.getElementById('csv-file').files[0];
-  if (!file) {{ alert('Veuillez sélectionner un fichier CSV.'); return; }}
-
-  const formData = new FormData();
-  formData.append('csv_file', file);
-
-  document.getElementById('progress').classList.remove('d-none');
-  document.getElementById('summary').innerHTML = '';
-  document.getElementById('results-table').innerHTML = '';
-
-  fetch(`/plugin/${{SLUG}}/import-csv/`, {{
-    method: 'POST',
-    headers: {{ 'X-CSRFToken': getCookie('csrftoken') }},
-    body: formData,
-  }})
-  .then(r => r.json())
-  .then(data => {{
-    document.getElementById('progress').classList.add('d-none');
-    const allOk = data.failed === 0;
-    document.getElementById('summary').innerHTML = `
-      <div class="alert ${{allOk ? 'alert-success' : 'alert-warning'}}">
-        <strong>Terminé !</strong>
-        ${{data.imported}}/${{data.total}} composants importés.
-        ${{data.failed > 0 ? `<br>${{data.failed}} erreur(s) — voir tableau ci-dessous.` : ''}}
-      </div>`;
-
-    const rows = data.results.map(r => `
-      <tr class="${{r.success ? 'result-ok' : 'result-err'}}">
-        <td>${{r.supplier}}</td>
-        <td><code>${{r.sku}}</code></td>
-        <td>${{r.success ? '✓' : '✗'}}</td>
-        <td>${{r.ipn || ''}}</td>
-        <td>${{r.part_pk ? `<a href="/part/${{r.part_pk}}/" target="_blank">Ouvrir →</a>` : ''}}</td>
-        <td><small class="text-danger">${{r.error || ''}}</small></td>
-      </tr>`).join('');
-
-    document.getElementById('results-table').innerHTML = `
-      <table class="table table-sm table-bordered">
-        <thead class="table-light">
-          <tr><th>Fournisseur</th><th>SKU</th><th>Statut</th><th>IPN</th><th>Lien</th><th>Détail</th></tr>
-        </thead>
-        <tbody>${{rows}}</tbody>
-      </table>`;
-  }})
-  .catch(err => {{
-    document.getElementById('progress').classList.add('d-none');
-    document.getElementById('summary').innerHTML =
-      `<div class="alert alert-danger">Erreur : ${{err}}</div>`;
-  }});
-}}
-</script>
-</body>
-</html>"""
-    return HttpResponse(html)
